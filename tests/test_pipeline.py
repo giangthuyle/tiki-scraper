@@ -119,6 +119,16 @@ async def test_fetch_batch_splits_success_not_found_and_failed(tmp_path, monkeyp
     assert failed == ["500"]
 
 
+async def test_fetch_batch_dedupes_duplicate_ids_within_batch(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    config = _make_config(tmp_path)
+    semaphore = asyncio.Semaphore(5)
+
+    records, not_found, failed = await fetch_batch(None, semaphore, ["1", "1"], config)
+
+    assert len(records) == 1
+
+
 async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
     monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)

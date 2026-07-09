@@ -111,16 +111,22 @@ async def _fetch_one(session, semaphore, raw_id, config, records, not_found, fai
             logger.error("giving up on id=%s: %s", raw_id, exc)
             failed.append(raw_id)
             return
+        except Exception as exc:
+            # A malformed response (e.g. a 200 with a non-JSON body) raises
+            # something other than NotFoundError/FetchError. One bad id must
+            # not crash the whole batch (and, uncaught, the whole 600k-id run).
+            logger.exception("unexpected error fetching id=%s: %s", raw_id, exc)
+            failed.append(raw_id)
+            return
 
     try:
         record = config.parse(raw)
+        if not validate_record(record, int(raw_id), config.required_fields):
+            logger.warning("validation failed for id=%s", raw_id)
+            failed.append(raw_id)
+            return
     except Exception:
-        logger.exception("parse failed for id=%s", raw_id)
-        failed.append(raw_id)
-        return
-
-    if not validate_record(record, int(raw_id), config.required_fields):
-        logger.warning("validation failed for id=%s", raw_id)
+        logger.exception("parse/validate failed for id=%s", raw_id)
         failed.append(raw_id)
         return
 
@@ -173,9 +179,15 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
             batch_slice = ids[start : end + 1]
             records, not_found, failed = await fetch_batch(session, semaphore, batch_slice, config)
 
-            write_batch_atomic(out_path, records)
+            # Log not_found/failed ids BEFORE writing the batch file: the
+            # batch file's existence is the resume marker (batch_is_done), so
+            # if a crash lands between these two writes, we want the batch to
+            # be re-fetched on resume (at worst duplicate log lines) rather
+            # than have batch_is_done mark it "done" while its failure/
+            # not-found ids were never logged and never will be.
             _append_lines(config.logs_dir / "not_found_ids.txt", not_found)
             _append_lines(config.logs_dir / "failed_ids.txt", failed)
+            write_batch_atomic(out_path, records)
 
             stats.fetched += len(records)
             stats.not_found += len(not_found)
