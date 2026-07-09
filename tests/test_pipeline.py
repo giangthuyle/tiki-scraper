@@ -1,10 +1,18 @@
+import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
+from tiki_scraper import pipeline as pipeline_module
+from tiki_scraper.client import FetchError, NotFoundError
 from tiki_scraper.pipeline import (
+    FetchConfig,
     batch_is_done,
     batch_ranges,
+    fetch_batch,
     output_filename,
+    run_pipeline,
     validate_record,
     verify_output,
     write_batch_atomic,
@@ -62,3 +70,82 @@ def test_verify_output_counts_duplicates_across_files(tmp_path: Path):
 
     assert total == 3
     assert duplicates == 1
+
+
+def _parse(raw: dict) -> dict:
+    return raw
+
+
+async def _fake_fetch_json(session, url, retries, backoff_base):
+    pid = url.rsplit("/", 1)[-1]
+    if pid == "404":
+        raise NotFoundError(url)
+    if pid == "500":
+        raise FetchError(url)
+    return {"id": int(pid), "name": "n", "url_key": "k", "price": 1, "images": []}
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _make_config(tmp_path: Path, **overrides) -> FetchConfig:
+    defaults = dict(
+        url_template="http://x/{id}",
+        parse=_parse,
+        required_fields=("id", "name", "url_key", "price", "images"),
+        output_dir=tmp_path / "output",
+        logs_dir=tmp_path / "logs",
+        batch_size=2,
+        concurrency=5,
+    )
+    defaults.update(overrides)
+    return FetchConfig(**defaults)
+
+
+async def test_fetch_batch_splits_success_not_found_and_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    config = _make_config(tmp_path)
+    semaphore = asyncio.Semaphore(5)
+
+    records, not_found, failed = await fetch_batch(None, semaphore, ["1", "404", "500"], config)
+
+    assert [r["id"] for r in records] == [1]
+    assert not_found == ["404"]
+    assert failed == ["500"]
+
+
+async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    config = _make_config(tmp_path)
+    ids = ["1", "2", "3", "4", "5"]
+
+    stats = await run_pipeline(ids, config)
+    assert stats.batches_total == 3
+    assert stats.batches_skipped == 0
+    assert stats.fetched == 5
+
+    stats_again = await run_pipeline(ids, config)
+    assert stats_again.batches_skipped == 3
+    assert stats_again.fetched == 0
+
+
+async def test_run_pipeline_logs_not_found_and_failed_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    config = _make_config(tmp_path, batch_size=3)
+    ids = ["1", "404", "500"]
+
+    stats = await run_pipeline(ids, config)
+
+    assert stats.not_found == 1
+    assert stats.failed == 1
+    not_found_log = (config.logs_dir / "not_found_ids.txt").read_text(encoding="utf-8")
+    failed_log = (config.logs_dir / "failed_ids.txt").read_text(encoding="utf-8")
+    assert "404" in not_found_log
+    assert "500" in failed_log

@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+
+import aiohttp
+
+from .client import FetchError, NotFoundError, fetch_json
 
 logger = logging.getLogger(__name__)
 
@@ -68,3 +75,114 @@ def verify_output(output_dir: Path) -> tuple[int, int]:
             else:
                 seen.add(rid)
     return total, duplicates
+
+
+@dataclass
+class FetchConfig:
+    url_template: str
+    parse: Callable[[dict], dict]
+    required_fields: tuple[str, ...]
+    output_dir: Path
+    logs_dir: Path
+    batch_size: int = 1000
+    concurrency: int = 50
+    retries: int = 3
+    backoff_base: float = 2.0
+
+
+@dataclass
+class PipelineStats:
+    batches_total: int = 0
+    batches_skipped: int = 0
+    fetched: int = 0
+    not_found: int = 0
+    failed: int = 0
+
+
+async def _fetch_one(session, semaphore, raw_id, config, records, not_found, failed) -> None:
+    url = config.url_template.format(id=raw_id)
+    async with semaphore:
+        try:
+            raw = await fetch_json(session, url, config.retries, config.backoff_base)
+        except NotFoundError:
+            not_found.append(raw_id)
+            return
+        except FetchError as exc:
+            logger.error("giving up on id=%s: %s", raw_id, exc)
+            failed.append(raw_id)
+            return
+
+    try:
+        record = config.parse(raw)
+    except Exception:
+        logger.exception("parse failed for id=%s", raw_id)
+        failed.append(raw_id)
+        return
+
+    if not validate_record(record, int(raw_id), config.required_fields):
+        logger.warning("validation failed for id=%s", raw_id)
+        failed.append(raw_id)
+        return
+
+    records.append(record)
+
+
+async def fetch_batch(session, semaphore, ids_batch: list[str], config: FetchConfig):
+    records: list[dict] = []
+    not_found: list[str] = []
+    failed: list[str] = []
+    await asyncio.gather(
+        *(
+            _fetch_one(session, semaphore, raw_id, config, records, not_found, failed)
+            for raw_id in ids_batch
+        )
+    )
+
+    deduped: dict[int, dict] = {}
+    for record in records:
+        if record["id"] in deduped:
+            logger.warning("duplicate id %s within batch, keeping first", record["id"])
+            continue
+        deduped[record["id"]] = record
+    return list(deduped.values()), not_found, failed
+
+
+def _append_lines(path: Path, lines: list[str]) -> None:
+    if not lines:
+        return
+    with path.open("a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+
+async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    config.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    ranges = batch_ranges(len(ids), config.batch_size)
+    stats = PipelineStats(batches_total=len(ranges))
+    semaphore = asyncio.Semaphore(config.concurrency)
+
+    async with aiohttp.ClientSession() as session:
+        for start, end in ranges:
+            out_path = config.output_dir / output_filename(start, end)
+            if batch_is_done(out_path):
+                stats.batches_skipped += 1
+                continue
+
+            batch_slice = ids[start : end + 1]
+            records, not_found, failed = await fetch_batch(session, semaphore, batch_slice, config)
+
+            write_batch_atomic(out_path, records)
+            _append_lines(config.logs_dir / "not_found_ids.txt", not_found)
+            _append_lines(config.logs_dir / "failed_ids.txt", failed)
+
+            stats.fetched += len(records)
+            stats.not_found += len(not_found)
+            stats.failed += len(failed)
+            logger.info(
+                "batch %d-%d: %d ok, %d not_found, %d failed",
+                start, end, len(records), len(not_found), len(failed),
+            )
+
+    return stats
