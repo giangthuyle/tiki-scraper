@@ -21,6 +21,7 @@ def test_parse_args_defaults_glob_data_dir(tmp_path: Path, monkeypatch):
     assert settings.concurrency == 3
     assert settings.retries == 3
     assert settings.backoff_base == 2.0
+    assert settings.adaptive_concurrency is True
 
 
 def test_parse_args_explicit_input_and_overrides(tmp_path: Path, monkeypatch):
@@ -53,3 +54,10 @@ def test_parse_args_no_matching_files_returns_empty_list(tmp_path: Path, monkeyp
     monkeypatch.chdir(tmp_path)
     settings = parse_args([])
     assert settings.input_paths == []
+
+
+def test_parse_args_fixed_concurrency_flag(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    settings = parse_args(["--concurrency", "1", "--fixed-concurrency"])
+    assert settings.concurrency == 1
+    assert settings.adaptive_concurrency is False

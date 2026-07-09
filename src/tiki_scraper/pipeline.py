@@ -100,6 +100,7 @@ class FetchConfig:
     concurrency: int = 3
     retries: int = 3
     backoff_base: float = 2.0
+    adaptive_concurrency: bool = True
 
 
 @dataclass
@@ -205,8 +206,8 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
 
     ranges = batch_ranges(len(ids), config.batch_size)
     stats = PipelineStats(batches_total=len(ranges))
-    ramp = _concurrency_ramp(config.concurrency)
-    current_concurrency = next(ramp)
+    ramp = _concurrency_ramp(config.concurrency) if config.adaptive_concurrency else None
+    current_concurrency = next(ramp) if ramp else config.concurrency
 
     async with aiohttp.ClientSession(headers=_DEFAULT_HEADERS) as session:
         for start, end in ranges:
@@ -237,11 +238,14 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
             used_concurrency = current_concurrency
             if blocked:
                 logger.warning(
-                    "batch %d-%d: WAF block signature on %d ids — resetting concurrency to floor %d",
-                    start, end, len(blocked), config.concurrency,
+                    "batch %d-%d: WAF block signature on %d ids%s",
+                    start, end, len(blocked),
+                    f" — resetting concurrency to floor {config.concurrency}" if ramp else "",
                 )
-                ramp = _concurrency_ramp(config.concurrency)
-            current_concurrency = next(ramp)
+            if ramp:
+                if blocked:
+                    ramp = _concurrency_ramp(config.concurrency)
+                current_concurrency = next(ramp)
 
             logger.info(
                 "batch %d-%d: %d ok, %d not_found, %d failed (%d blocked) at concurrency=%d; next batch concurrency=%d",

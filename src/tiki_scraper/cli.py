@@ -38,11 +38,12 @@ def main(argv: list[str] | None = None) -> None:
         concurrency=settings.concurrency,
         retries=settings.retries,
         backoff_base=settings.backoff_base,
+        adaptive_concurrency=settings.adaptive_concurrency,
     )
     stats = asyncio.run(run_pipeline(ids, config))
     logger.info(
-        "pipeline done: batches_total=%d batches_skipped=%d fetched=%d not_found=%d failed=%d",
-        stats.batches_total, stats.batches_skipped, stats.fetched, stats.not_found, stats.failed,
+        "pipeline done: batches_total=%d batches_skipped=%d fetched=%d not_found=%d failed=%d blocked=%d",
+        stats.batches_total, stats.batches_skipped, stats.fetched, stats.not_found, stats.failed, stats.blocked,
     )
 
     total, duplicates = verify_output(settings.output_dir)

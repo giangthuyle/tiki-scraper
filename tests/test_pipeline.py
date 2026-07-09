@@ -218,3 +218,16 @@ async def test_run_pipeline_resets_concurrency_to_floor_after_blocked_batch(tmp_
 
     assert recorded == [3, 5, 3]
     assert stats.blocked == 1
+
+
+async def test_run_pipeline_fixed_concurrency_never_ramps(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    recorded: list[int] = []
+    monkeypatch.setattr(pipeline_module.asyncio, "Semaphore", _make_recording_semaphore(recorded))
+    config = _make_config(tmp_path, batch_size=1, concurrency=1, adaptive_concurrency=False)
+    ids = ["1", "2", "3"]
+
+    await run_pipeline(ids, config)
+
+    assert recorded == [1, 1, 1]
