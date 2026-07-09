@@ -13,6 +13,18 @@ from .client import FetchError, NotFoundError, fetch_json
 
 logger = logging.getLogger(__name__)
 
+# Tiki's edge WAF blocks aiohttp's default User-Agent under load; send a
+# realistic browser header so requests aren't trivially fingerprinted as a
+# bot at the connection level (does not bypass volume-based rate limiting —
+# see --concurrency).
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
 
 def batch_ranges(total: int, batch_size: int) -> list[tuple[int, int]]:
     ranges = []
@@ -175,7 +187,7 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
     stats = PipelineStats(batches_total=len(ranges))
     semaphore = asyncio.Semaphore(config.concurrency)
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(headers=_DEFAULT_HEADERS) as session:
         for start, end in ranges:
             out_path = config.output_dir / output_filename(start, end)
             if batch_is_done(out_path):

@@ -86,6 +86,9 @@ async def _fake_fetch_json(session, url, retries, backoff_base):
 
 
 class _FakeSession:
+    def __init__(self, *args, **kwargs):
+        pass
+
     async def __aenter__(self):
         return self
 
