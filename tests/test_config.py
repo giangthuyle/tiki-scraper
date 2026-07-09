@@ -18,7 +18,7 @@ def test_parse_args_defaults_glob_data_dir(tmp_path: Path, monkeypatch):
     assert settings.output_dir == Path("output")
     assert settings.logs_dir == Path("logs")
     assert settings.batch_size == 1000
-    assert settings.concurrency == 50
+    assert settings.concurrency == 3
     assert settings.retries == 3
     assert settings.backoff_base == 2.0
 

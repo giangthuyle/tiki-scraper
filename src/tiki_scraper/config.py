@@ -24,7 +24,7 @@ def parse_args(argv: list[str] | None = None) -> Settings:
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--logs-dir", default="logs")
     parser.add_argument("--batch-size", type=int, default=1000)
-    parser.add_argument("--concurrency", type=int, default=50)
+    parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--backoff-base", type=float, default=2.0)
     args = parser.parse_args(argv)

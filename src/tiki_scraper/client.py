@@ -18,6 +18,12 @@ class FetchError(Exception):
     pass
 
 
+class BlockedError(FetchError):
+    """A 200 response whose body isn't JSON — the WAF challenge-page
+    signature, distinct from an ordinary transient failure so callers can
+    react to it specifically (e.g. back off concurrency)."""
+
+
 async def fetch_json(session, url: str, retries: int, backoff_base: float) -> dict:
     attempt = 0
     while True:
@@ -33,6 +39,8 @@ async def fetch_json(session, url: str, retries: int, backoff_base: float) -> di
         except (FetchError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
             attempt += 1
             if attempt > retries:
+                if isinstance(exc, aiohttp.ContentTypeError):
+                    raise BlockedError(f"{url} blocked after {retries} retries: {exc}") from exc
                 raise FetchError(f"{url} failed after {retries} retries: {exc}") from exc
             delay = backoff_base * (2 ** (attempt - 1))
             logger.warning("retry %d/%d for %s in %.1fs: %s", attempt, retries, url, delay, exc)

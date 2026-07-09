@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tiki_scraper import pipeline as pipeline_module
-from tiki_scraper.client import FetchError, NotFoundError
+from tiki_scraper.client import BlockedError, FetchError, NotFoundError
 from tiki_scraper.pipeline import (
     FetchConfig,
     batch_is_done,
@@ -82,6 +82,8 @@ async def _fake_fetch_json(session, url, retries, backoff_base):
         raise NotFoundError(url)
     if pid == "500":
         raise FetchError(url)
+    if pid == "blocked":
+        raise BlockedError(url)
     return {"id": int(pid), "name": "n", "url_key": "k", "price": 1, "images": []}
 
 
@@ -115,11 +117,12 @@ async def test_fetch_batch_splits_success_not_found_and_failed(tmp_path, monkeyp
     config = _make_config(tmp_path)
     semaphore = asyncio.Semaphore(5)
 
-    records, not_found, failed = await fetch_batch(None, semaphore, ["1", "404", "500"], config)
+    records, not_found, failed, blocked = await fetch_batch(None, semaphore, ["1", "404", "500"], config)
 
     assert [r["id"] for r in records] == [1]
     assert not_found == ["404"]
     assert failed == ["500"]
+    assert blocked == []
 
 
 async def test_fetch_batch_dedupes_duplicate_ids_within_batch(tmp_path, monkeypatch):
@@ -127,9 +130,21 @@ async def test_fetch_batch_dedupes_duplicate_ids_within_batch(tmp_path, monkeypa
     config = _make_config(tmp_path)
     semaphore = asyncio.Semaphore(5)
 
-    records, not_found, failed = await fetch_batch(None, semaphore, ["1", "1"], config)
+    records, not_found, failed, blocked = await fetch_batch(None, semaphore, ["1", "1"], config)
 
     assert len(records) == 1
+
+
+async def test_fetch_batch_routes_blocked_error_to_failed_and_blocked(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    config = _make_config(tmp_path)
+    semaphore = asyncio.Semaphore(5)
+
+    records, not_found, failed, blocked = await fetch_batch(None, semaphore, ["1", "blocked"], config)
+
+    assert [r["id"] for r in records] == [1]
+    assert failed == ["blocked"]
+    assert blocked == ["blocked"]
 
 
 async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
@@ -162,3 +177,44 @@ async def test_run_pipeline_logs_not_found_and_failed_ids(tmp_path, monkeypatch)
     failed_log = (config.logs_dir / "failed_ids.txt").read_text(encoding="utf-8")
     assert not_found_log == "id\n404\n"
     assert failed_log == "id\n500\n"
+
+
+def test_concurrency_ramp_yields_fibonacci_from_floor():
+    ramp = pipeline_module._concurrency_ramp(3)
+    assert [next(ramp) for _ in range(6)] == [3, 5, 8, 13, 21, 34]
+
+
+def _make_recording_semaphore(recorded: list[int]):
+    class _RecordingSemaphore(asyncio.Semaphore):
+        def __init__(self, value):
+            recorded.append(value)
+            super().__init__(value)
+
+    return _RecordingSemaphore
+
+
+async def test_run_pipeline_ramps_concurrency_up_on_clean_batches(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    recorded: list[int] = []
+    monkeypatch.setattr(pipeline_module.asyncio, "Semaphore", _make_recording_semaphore(recorded))
+    config = _make_config(tmp_path, batch_size=1, concurrency=3)
+    ids = ["1", "2", "3", "4"]
+
+    await run_pipeline(ids, config)
+
+    assert recorded == [3, 5, 8, 13]
+
+
+async def test_run_pipeline_resets_concurrency_to_floor_after_blocked_batch(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
+    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    recorded: list[int] = []
+    monkeypatch.setattr(pipeline_module.asyncio, "Semaphore", _make_recording_semaphore(recorded))
+    config = _make_config(tmp_path, batch_size=1, concurrency=3)
+    ids = ["1", "blocked", "3"]
+
+    stats = await run_pipeline(ids, config)
+
+    assert recorded == [3, 5, 3]
+    assert stats.blocked == 1

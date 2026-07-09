@@ -19,7 +19,10 @@ Options (see `uv run tiki-scraper --help`):
 - `--output-dir` — where batch JSON files are written (default: `output/`)
 - `--logs-dir` — where `not_found_ids.txt` / `failed_ids.txt` are written (default: `logs/`)
 - `--batch-size` — ids per output file (default: `1000`)
-- `--concurrency` — max in-flight requests (default: `50`)
+- `--concurrency` — max in-flight requests (default: `3`; Tiki's WAF blocks
+  sustained higher concurrency with a 200-status HTML challenge page instead
+  of JSON — calibrated empirically, raise only after testing on a small
+  sample)
 - `--retries` — retry attempts per request on network error/5xx/429 (default: `3`)
 - `--backoff-base` — seconds, exponential backoff base between retries (default: `2.0`)
 

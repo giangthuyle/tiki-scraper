@@ -9,7 +9,7 @@ from typing import Callable
 
 import aiohttp
 
-from .client import FetchError, NotFoundError, fetch_json
+from .client import BlockedError, FetchError, NotFoundError, fetch_json
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class FetchConfig:
     output_dir: Path
     logs_dir: Path
     batch_size: int = 1000
-    concurrency: int = 50
+    concurrency: int = 3
     retries: int = 3
     backoff_base: float = 2.0
 
@@ -109,15 +109,34 @@ class PipelineStats:
     fetched: int = 0
     not_found: int = 0
     failed: int = 0
+    blocked: int = 0
 
 
-async def _fetch_one(session, semaphore, raw_id, config, records, not_found, failed) -> None:
+def _concurrency_ramp(min_concurrency: int):
+    """Yields the Fibonacci sequence filtered to values >= min_concurrency
+    (e.g. min=3 -> 3, 5, 8, 13, 21, ...). run_pipeline advances this after
+    each clean batch to feel out a higher sustainable concurrency, and
+    restarts it (back to the floor) the moment a batch shows a WAF block
+    signature."""
+    a, b = 1, 1
+    while True:
+        if a >= min_concurrency:
+            yield a
+        a, b = b, a + b
+
+
+async def _fetch_one(session, semaphore, raw_id, config, records, not_found, failed, blocked) -> None:
     url = config.url_template.format(id=raw_id)
     async with semaphore:
         try:
             raw = await fetch_json(session, url, config.retries, config.backoff_base)
         except NotFoundError:
             not_found.append(raw_id)
+            return
+        except BlockedError as exc:
+            logger.error("blocked (WAF signature) for id=%s: %s", raw_id, exc)
+            failed.append(raw_id)
+            blocked.append(raw_id)
             return
         except FetchError as exc:
             logger.error("giving up on id=%s: %s", raw_id, exc)
@@ -149,9 +168,10 @@ async def fetch_batch(session, semaphore, ids_batch: list[str], config: FetchCon
     records: list[dict] = []
     not_found: list[str] = []
     failed: list[str] = []
+    blocked: list[str] = []
     await asyncio.gather(
         *(
-            _fetch_one(session, semaphore, raw_id, config, records, not_found, failed)
+            _fetch_one(session, semaphore, raw_id, config, records, not_found, failed, blocked)
             for raw_id in ids_batch
         )
     )
@@ -162,7 +182,7 @@ async def fetch_batch(session, semaphore, ids_batch: list[str], config: FetchCon
             logger.warning("duplicate id %s within batch, keeping first", record["id"])
             continue
         deduped[record["id"]] = record
-    return list(deduped.values()), not_found, failed
+    return list(deduped.values()), not_found, failed, blocked
 
 
 def _append_lines(path: Path, lines: list[str]) -> None:
@@ -185,7 +205,8 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
 
     ranges = batch_ranges(len(ids), config.batch_size)
     stats = PipelineStats(batches_total=len(ranges))
-    semaphore = asyncio.Semaphore(config.concurrency)
+    ramp = _concurrency_ramp(config.concurrency)
+    current_concurrency = next(ramp)
 
     async with aiohttp.ClientSession(headers=_DEFAULT_HEADERS) as session:
         for start, end in ranges:
@@ -195,7 +216,8 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
                 continue
 
             batch_slice = ids[start : end + 1]
-            records, not_found, failed = await fetch_batch(session, semaphore, batch_slice, config)
+            semaphore = asyncio.Semaphore(current_concurrency)
+            records, not_found, failed, blocked = await fetch_batch(session, semaphore, batch_slice, config)
 
             # Log not_found/failed ids BEFORE writing the batch file: the
             # batch file's existence is the resume marker (batch_is_done), so
@@ -210,9 +232,21 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
             stats.fetched += len(records)
             stats.not_found += len(not_found)
             stats.failed += len(failed)
+            stats.blocked += len(blocked)
+
+            used_concurrency = current_concurrency
+            if blocked:
+                logger.warning(
+                    "batch %d-%d: WAF block signature on %d ids — resetting concurrency to floor %d",
+                    start, end, len(blocked), config.concurrency,
+                )
+                ramp = _concurrency_ramp(config.concurrency)
+            current_concurrency = next(ramp)
+
             logger.info(
-                "batch %d-%d: %d ok, %d not_found, %d failed",
-                start, end, len(records), len(not_found), len(failed),
+                "batch %d-%d: %d ok, %d not_found, %d failed (%d blocked) at concurrency=%d; next batch concurrency=%d",
+                start, end, len(records), len(not_found), len(failed), len(blocked),
+                used_concurrency, current_concurrency,
             )
 
     return stats
