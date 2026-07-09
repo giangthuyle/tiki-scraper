@@ -28,6 +28,9 @@ that already exists and parses as a JSON array is treated as already
 attempted and is not re-fetched. Ids that returned 404 are recorded in
 `logs/not_found_ids.txt` (product no longer exists — not an error). Ids
 that failed after exhausting retries are recorded in `logs/failed_ids.txt`.
+Both log files start with an `id` header, so they're valid `--input` CSVs
+on their own — re-run just the failures with
+`uv run tiki-scraper --input logs/failed_ids.txt --output-dir output2`.
 
 ## Tests
 

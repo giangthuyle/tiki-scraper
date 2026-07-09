@@ -156,7 +156,13 @@ async def fetch_batch(session, semaphore, ids_batch: list[str], config: FetchCon
 def _append_lines(path: Path, lines: list[str]) -> None:
     if not lines:
         return
+    # Write an "id" header on first creation so the log file is itself a
+    # valid --input CSV (ids.load_ids requires an "id" column header) —
+    # not_found/failed ids can be re-run standalone without manual editing.
+    is_new = not path.exists()
     with path.open("a", encoding="utf-8") as f:
+        if is_new:
+            f.write("id\n")
         for line in lines:
             f.write(line + "\n")
 

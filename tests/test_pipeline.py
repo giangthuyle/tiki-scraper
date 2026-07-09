@@ -157,5 +157,5 @@ async def test_run_pipeline_logs_not_found_and_failed_ids(tmp_path, monkeypatch)
     assert stats.failed == 1
     not_found_log = (config.logs_dir / "not_found_ids.txt").read_text(encoding="utf-8")
     failed_log = (config.logs_dir / "failed_ids.txt").read_text(encoding="utf-8")
-    assert "404" in not_found_log
-    assert "500" in failed_log
+    assert not_found_log == "id\n404\n"
+    assert failed_log == "id\n500\n"
