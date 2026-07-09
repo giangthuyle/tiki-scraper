@@ -1,0 +1,29 @@
+[project]
+name = "tiki-scraper"
+version = "0.1.0"
+description = "Fetch Tiki product-detail data for a large set of product ids"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "uvloop>=0.19; sys_platform != 'win32'",
+]
+
+[project.scripts]
+tiki-scraper = "tiki_scraper.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tiki_scraper"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
