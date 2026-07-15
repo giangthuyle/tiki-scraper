@@ -1,50 +1,20 @@
-from pathlib import Path
-
-from tiki_scraper.product import PRODUCT_URL_TEMPLATE, build_config, parse_product
-
-_RAW = {
-    "id": 138083218,
-    "name": "Do Choi Xep Hinh",
-    "url_key": "do-choi-xep-hinh-p138083218",
-    "price": 268000,
-    "description": "<p><strong>Mo ta</strong> san pham</p>",
-    "images": [
-        {"base_url": "https://salt.tikicdn.com/a.png", "large_url": "https://salt.tikicdn.com/large/a.png"},
-        {"large_url": "https://salt.tikicdn.com/large/b.png"},
-    ],
-}
+from tiki_scraper.product import REQUIRED_FIELDS, parse_product
 
 
-def test_parse_product_maps_and_normalizes_fields():
-    record = parse_product(_RAW)
-
-    assert record == {
-        "id": 138083218,
-        "name": "Do Choi Xep Hinh",
-        "url_key": "do-choi-xep-hinh-p138083218",
-        "price": 268000,
-        "description": "Mo ta san pham",
-        "images": ["https://salt.tikicdn.com/a.png"],
-    }
+def test_parse_product_keeps_all_fields_and_int_id():
+    raw = {"id": "42", "name": "x", "inventory": {"qty": 3}, "extra": [1, 2]}
+    out = parse_product(raw)
+    assert out["id"] == 42
+    assert out["name"] == "x"
+    assert out["inventory"] == {"qty": 3}
+    assert out["extra"] == [1, 2]
 
 
-def test_parse_product_handles_missing_images_key():
-    raw = dict(_RAW, images=None)
-    record = parse_product(raw)
-    assert record["images"] == []
+def test_parse_product_does_not_mutate_input():
+    raw = {"id": "7"}
+    parse_product(raw)
+    assert raw["id"] == "7"
 
 
-def test_build_config_wires_product_url_and_parser(tmp_path: Path):
-    config = build_config(
-        output_dir=tmp_path / "output",
-        logs_dir=tmp_path / "logs",
-        batch_size=100,
-        concurrency=10,
-        retries=2,
-        backoff_base=1.0,
-    )
-
-    assert config.url_template == PRODUCT_URL_TEMPLATE
-    assert config.parse is parse_product
-    assert config.required_fields == ("id", "name", "url_key", "price", "images")
-    assert config.batch_size == 100
+def test_required_fields_is_just_id():
+    assert REQUIRED_FIELDS == ("id",)

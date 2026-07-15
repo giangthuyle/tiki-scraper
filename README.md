@@ -1,8 +1,8 @@
 # tiki-scraper
 
 Fetches Tiki product-detail data for the product ids listed in
-`data/products-*.csv` and saves normalized records (`id`, `name`,
-`url_key`, `price`, `description`, `images`) as batched JSON files in
+`data/products-*.csv` and saves the **full** Tiki product-detail JSON (every field the API
+returns, with `id` normalized to an integer) as batched JSON files in
 `output/`.
 
 ## Setup
@@ -41,3 +41,27 @@ on their own — re-run just the failures with
 ## Tests
 
     uv run pytest
+
+## Deploy lên Azure (Terraform)
+
+Cần: Azure CLI đã `az login`, Terraform >= 1.5, và Git LFS.
+
+Các file `data/products-*.csv` (danh sách id) được track qua **Git LFS** — sau
+khi clone phải `git lfs pull` để lấy nội dung thật; nếu không, zip deploy chỉ
+đóng gói con trỏ LFS và function sẽ trả HTTP 500 ("no product ids deployed").
+
+    git lfs pull
+    cd infra
+    terraform init
+    terraform apply      # tạo RG, Storage, Consumption plan, Function App + zip-deploy code
+
+Sau khi apply, gọi một batch (batch_id 0..5999, mỗi batch 100 id):
+
+    HOST=$(terraform output -raw function_hostname)
+    KEY=$(az functionapp keys list -g tikiscraper-rg -n tikiscraper-func --query functionKeys.default -o tsv)
+    curl -X POST "https://$HOST/api/scrape?code=$KEY" \
+      -H 'content-type: application/json' -d '{"batch_id": 0}'
+
+Kết quả JSON ghi vào container Blob `output/` (`output/products_<start>-<end>.json`);
+id 404 → `logs/not_found_ids/<batch_id>.txt`, id lỗi → `logs/failed_ids/<batch_id>.txt`.
+Gọi lại cùng `batch_id` khi output đã có → trả `already_done` (idempotent).
