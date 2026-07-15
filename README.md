@@ -42,26 +42,28 @@ on their own — re-run just the failures with
 
     uv run pytest
 
-## Deploy lên Azure (Terraform)
+## Deploy lên Azure (queue + multi-region)
 
-Cần: Azure CLI đã `az login`, Terraform >= 1.5, và Git LFS.
+Cần: Azure CLI đã `az login`, Terraform >= 1.5, Git LFS.
 
-Các file `data/products-*.csv` (danh sách id) được track qua **Git LFS** — sau
-khi clone phải `git lfs pull` để lấy nội dung thật; nếu không, zip deploy chỉ
-đóng gói con trỏ LFS và function sẽ trả HTTP 500 ("no product ids deployed").
-
-    git lfs pull
+    git lfs pull                 # lấy data/products-*.csv (LFS)
     cd infra
     terraform init
-    terraform apply      # tạo RG, Storage, Consumption plan, Function App + zip-deploy code
+    terraform apply              # HUB storage (queue+output) + 4 Function App (4 region)
 
-Sau khi apply, gọi một batch (batch_id 0..5999, mỗi batch 100 id):
+Enqueue toàn bộ batch (chạy từ repo root, cần data local để đếm số batch):
 
-    HOST=$(terraform output -raw function_hostname)
-    KEY=$(az functionapp keys list -g tikiscraper-rg -n tikiscraper-func --query functionKeys.default -o tsv)
-    curl -X POST "https://$HOST/api/scrape?code=$KEY" \
-      -H 'content-type: application/json' -d '{"batch_id": 0}'
+    export HUB_STORAGE=$(cd infra && terraform output -raw hub_connection_string)
+    uv run python dispatch.py --dry-run    # kiểm tra: 12000 batches (batch_size=50)
+    uv run python dispatch.py              # enqueue 0..11999 vào queue "batches"
 
-Kết quả JSON ghi vào container Blob `output/` (`output/products_<start>-<end>.json`);
-id 404 → `logs/not_found_ids/<batch_id>.txt`, id lỗi → `logs/failed_ids/<batch_id>.txt`.
-Gọi lại cùng `batch_id` khi output đã có → trả `already_done` (idempotent).
+4 Function App ở southeastasia/eastasia/japaneast/koreacentral cùng rút queue
+(mỗi region một IP egress khác → phân tán rủi ro WAF), scrape rồi ghi JSON về
+container `output` của HUB storage. Queue tự retry message lỗi; message hỏng
+rơi vào `batches-poison`. Chạy lại `dispatch.py` an toàn — batch đã có output
+được bỏ qua (idempotent). Xem kết quả:
+
+    KEY=$(az storage account keys list -g tikiscraper-rg -n $(cd infra && terraform output -raw hub_storage_account) --query "[0].value" -o tsv)
+    az storage blob list --account-name $(cd infra && terraform output -raw hub_storage_account) --account-key "$KEY" --container-name output --query "[].name" -o tsv
+
+Dọn: `cd infra && terraform destroy`.
