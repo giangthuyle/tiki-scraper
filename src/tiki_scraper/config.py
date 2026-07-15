@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,7 @@ class Settings:
     retries: int
     backoff_base: float
     adaptive_concurrency: bool
+    proxy: str | None
 
 
 def parse_args(argv: list[str] | None = None) -> Settings:
@@ -32,6 +34,11 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         "--fixed-concurrency",
         action="store_true",
         help="use --concurrency as a constant instead of ramping it up along the Fibonacci sequence",
+    )
+    parser.add_argument(
+        "--proxy",
+        default=os.environ.get("SCRAPER_PROXY"),
+        help="proxy URL for outbound Tiki requests (default: $SCRAPER_PROXY); e.g. an IPRoyal residential endpoint",
     )
     args = parser.parse_args(argv)
 
@@ -49,4 +56,5 @@ def parse_args(argv: list[str] | None = None) -> Settings:
         retries=args.retries,
         backoff_base=args.backoff_base,
         adaptive_concurrency=not args.fixed_concurrency,
+        proxy=args.proxy,
     )

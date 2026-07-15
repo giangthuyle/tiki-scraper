@@ -28,6 +28,9 @@ Options (see `uv run tiki-scraper --help`):
   slowest, most conservative rate).
 - `--retries` — retry attempts per request on network error/5xx/429 (default: `3`)
 - `--backoff-base` — seconds, exponential backoff base between retries (default: `2.0`)
+- `--proxy` — proxy URL for outbound Tiki requests (default: `$SCRAPER_PROXY`). Tiki's
+  WAF blocks datacenter/cloud egress IPs, so a **residential proxy** is needed when
+  scraping from Azure/a VPS. See the IPRoyal section below.
 
 Re-running the same command resumes automatically: any `output/products_<start>-<end>.json`
 that already exists and parses as a JSON array is treated as already
@@ -67,3 +70,29 @@ rơi vào `batches-poison`. Chạy lại `dispatch.py` an toàn — batch đã c
     az storage blob list --account-name $(cd infra && terraform output -raw hub_storage_account) --account-key "$KEY" --container-name output --query "[].name" -o tsv
 
 Dọn: `cd infra && terraform destroy`.
+
+## Proxy residential (IPRoyal) — vượt WAF từ IP cloud
+
+Tiki chặn IP datacenter (Azure/VPS) nên cần **residential proxy**. IPRoyal cấp một
+gateway duy nhất, tự luân phiên IP trong pool — cắm qua env `SCRAPER_PROXY` (không
+đặt `HTTPS_PROXY` toàn cục để tránh proxy cả traffic Azure SDK).
+
+Định dạng endpoint IPRoyal residential (rotating, geo Việt Nam):
+
+    http://USERNAME:PASSWORD_country-vn@geo.iproyal.com:12321
+
+- `_country-vn` sau password → chỉ dùng IP Việt Nam (giảm nghi ngờ + latency).
+- Rotating mặc định (IP mới mỗi request). Muốn IP dính (sticky) thêm
+  `_session-<id>_lifetime-10m`.
+
+Chạy local:
+
+    SCRAPER_PROXY='http://USER:PASS_country-vn@geo.iproyal.com:12321' \
+      uv run tiki-scraper --concurrency 1
+
+Trên Azure — truyền qua Terraform (đặt vào app-setting `SCRAPER_PROXY` của cả 4 region):
+
+    terraform apply -var 'scraper_proxy=http://USER:PASS_country-vn@geo.iproyal.com:12321'
+
+Để trống → đi thẳng không proxy (mặc định). Bắt đầu với `--concurrency 1` để tiết
+kiệm băng thông proxy (tính theo GB) rồi tăng dần nếu không bị chặn.

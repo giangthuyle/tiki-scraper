@@ -23,6 +23,7 @@ def build_config(
     retries: int,
     backoff_base: float,
     adaptive_concurrency: bool = True,
+    proxy: str | None = None,
 ) -> FetchConfig:
     return FetchConfig(
         url_template=PRODUCT_URL_TEMPLATE,
@@ -35,4 +36,5 @@ def build_config(
         retries=retries,
         backoff_base=backoff_base,
         adaptive_concurrency=adaptive_concurrency,
+        proxy=proxy,
     )

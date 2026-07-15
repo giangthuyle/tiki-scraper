@@ -29,9 +29,11 @@ class _FakeSession:
     def __init__(self, responses):
         self._responses = iter(responses)
         self.calls = 0
+        self.last_proxy = None
 
-    def get(self, url):
+    def get(self, url, proxy=None):
         self.calls += 1
+        self.last_proxy = proxy
         return next(self._responses)
 
 
@@ -78,3 +80,15 @@ async def test_fetch_json_raises_blocked_error_on_repeated_non_json_200():
 
 async def test_fetch_json_blocked_error_is_a_fetch_error():
     assert issubclass(BlockedError, FetchError)
+
+
+async def test_fetch_json_passes_proxy_to_session():
+    session = _FakeSession([_FakeResponse(200, {"id": 1})])
+    await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0, proxy="http://p:8080")
+    assert session.last_proxy == "http://p:8080"
+
+
+async def test_fetch_json_defaults_to_no_proxy():
+    session = _FakeSession([_FakeResponse(200, {"id": 1})])
+    await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0)
+    assert session.last_proxy is None

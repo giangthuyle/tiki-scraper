@@ -24,11 +24,11 @@ class BlockedError(FetchError):
     react to it specifically (e.g. back off concurrency)."""
 
 
-async def fetch_json(session, url: str, retries: int, backoff_base: float) -> dict:
+async def fetch_json(session, url: str, retries: int, backoff_base: float, proxy: str | None = None) -> dict:
     attempt = 0
     while True:
         try:
-            async with session.get(url) as response:
+            async with session.get(url, proxy=proxy) as response:
                 if response.status == 404:
                     raise NotFoundError(url)
                 if response.status in _RETRYABLE_STATUSES:

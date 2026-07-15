@@ -101,6 +101,7 @@ class FetchConfig:
     retries: int = 3
     backoff_base: float = 2.0
     adaptive_concurrency: bool = True
+    proxy: str | None = None
 
 
 @dataclass
@@ -130,7 +131,7 @@ async def _fetch_one(session, semaphore, raw_id, config, records, not_found, fai
     url = config.url_template.format(id=raw_id)
     async with semaphore:
         try:
-            raw = await fetch_json(session, url, config.retries, config.backoff_base)
+            raw = await fetch_json(session, url, config.retries, config.backoff_base, proxy=config.proxy)
         except NotFoundError:
             not_found.append(raw_id)
             return
