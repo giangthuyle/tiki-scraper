@@ -3,21 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from .pipeline import FetchConfig
-from .text import html_to_text
 
 PRODUCT_URL_TEMPLATE = "https://api.tiki.vn/product-detail/api/v1/products/{id}"
-REQUIRED_FIELDS: tuple[str, ...] = ("id", "name", "url_key", "price", "images")
+REQUIRED_FIELDS: tuple[str, ...] = ("id",)
 
 
 def parse_product(raw: dict) -> dict:
-    return {
-        "id": int(raw["id"]),
-        "name": (raw.get("name") or "").strip(),
-        "url_key": (raw.get("url_key") or "").strip(),
-        "price": raw.get("price"),
-        "description": html_to_text(raw.get("description") or ""),
-        "images": [img["base_url"] for img in (raw.get("images") or []) if img.get("base_url")],
-    }
+    # Lưu nguyên vẹn response product-detail của Tiki (mọi field); chỉ ép id
+    # về int để pipeline dedup (dùng làm khoá) và validate_record so khớp id.
+    return {**raw, "id": int(raw["id"])}
 
 
 def build_config(

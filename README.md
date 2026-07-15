@@ -1,8 +1,8 @@
 # tiki-scraper
 
 Fetches Tiki product-detail data for the product ids listed in
-`data/products-*.csv` and saves normalized records (`id`, `name`,
-`url_key`, `price`, `description`, `images`) as batched JSON files in
+`data/products-*.csv` and saves the **full** Tiki product-detail JSON (every field the API
+returns, with `id` normalized to an integer) as batched JSON files in
 `output/`.
 
 ## Setup
