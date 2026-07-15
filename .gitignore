@@ -5,3 +5,5 @@ output/
 logs/
 *.egg-info/
 .pytest_cache/
+infra/.terraform/
+infra/function.zip
