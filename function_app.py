@@ -61,6 +61,7 @@ def process_batch(batch_id: int) -> dict:
             concurrency=int(os.environ.get("CONCURRENCY", "3")),
             retries=int(os.environ.get("RETRIES", "3")),
             backoff_base=float(os.environ.get("BACKOFF_BASE", "2.0")),
+            proxy=os.environ.get("SCRAPER_PROXY") or None,
         )
         stats = asyncio.run(run_pipeline(ids, config))
 

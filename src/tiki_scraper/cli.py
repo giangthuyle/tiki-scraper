@@ -39,6 +39,7 @@ def main(argv: list[str] | None = None) -> None:
         retries=settings.retries,
         backoff_base=settings.backoff_base,
         adaptive_concurrency=settings.adaptive_concurrency,
+        proxy=settings.proxy,
     )
     stats = asyncio.run(run_pipeline(ids, config))
     logger.info(

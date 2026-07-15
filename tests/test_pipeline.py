@@ -76,7 +76,7 @@ def _parse(raw: dict) -> dict:
     return raw
 
 
-async def _fake_fetch_json(session, url, retries, backoff_base):
+async def _fake_fetch_json(session, url, retries, backoff_base, proxy=None):
     pid = url.rsplit("/", 1)[-1]
     if pid == "404":
         raise NotFoundError(url)
