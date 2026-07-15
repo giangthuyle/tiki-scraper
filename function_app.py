@@ -64,6 +64,17 @@ def process_batch(batch_id: int) -> dict:
         )
         stats = asyncio.run(run_pipeline(ids, config))
 
+        # A WAF block means THIS region's egress IP was challenged. Raise so the
+        # queue redelivers the message (likely to a different region's IP) rather
+        # than marking the batch done: run_pipeline always writes an output file
+        # (even [] when all ids were blocked), so uploading it here would set the
+        # idempotency marker and no other region would ever retry this batch.
+        if stats.blocked:
+            raise RuntimeError(
+                f"batch {batch_id}: {stats.blocked} ids WAF-blocked; "
+                "raising for redelivery to another region"
+            )
+
         # pipeline names files by LOCAL index; upload under the GLOBAL name so
         # batches don't collide in the shared container.
         produced = list((tmp_path / "output").glob("products_*.json"))

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tiki_scraper.ids import load_ids
 
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "100"))
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "50"))
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
