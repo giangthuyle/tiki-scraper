@@ -44,8 +44,13 @@ on their own — re-run just the failures with
 
 ## Deploy lên Azure (Terraform)
 
-Cần: Azure CLI đã `az login`, Terraform >= 1.5.
+Cần: Azure CLI đã `az login`, Terraform >= 1.5, và Git LFS.
 
+Các file `data/products-*.csv` (danh sách id) được track qua **Git LFS** — sau
+khi clone phải `git lfs pull` để lấy nội dung thật; nếu không, zip deploy chỉ
+đóng gói con trỏ LFS và function sẽ trả HTTP 500 ("no product ids deployed").
+
+    git lfs pull
     cd infra
     terraform init
     terraform apply      # tạo RG, Storage, Consumption plan, Function App + zip-deploy code
