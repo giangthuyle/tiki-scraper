@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# tiki_scraper sống trong src/ — thêm vào path để deployment zip import được
-# (không đóng gói thành wheel, tránh bước build package trong Oryx).
+# tiki_scraper lives under src/ — add it to the path so the deployment zip
+# can import it (no wheel packaging, to avoid a build step in Oryx).
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import asyncio
@@ -14,11 +14,19 @@ import os
 import tempfile
 
 import azure.functions as func
+from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient
 
-from batches import BATCH_SIZE, batch_slice, parse_batch_id
+from batches import BATCH_SIZE, all_ids, batch_slice, parse_batch_id
 from tiki_scraper.pipeline import output_filename, run_pipeline
 from tiki_scraper.product import build_config
+
+try:
+    import uvloop
+
+    uvloop.install()
+except ImportError:
+    pass
 
 app = func.FunctionApp()
 logger = logging.getLogger(__name__)
@@ -37,6 +45,12 @@ def scrape(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError as exc:
         return func.HttpResponse(str(exc), status_code=400)
 
+    if not all_ids():
+        return func.HttpResponse(
+            "no product ids deployed (data/products-*.csv missing from package)",
+            status_code=500,
+        )
+
     try:
         start, end, ids = batch_slice(batch_id)
     except IndexError as exc:
@@ -47,12 +61,12 @@ def scrape(req: func.HttpRequest) -> func.HttpResponse:
     container = blob_service.get_container_client(OUTPUT_CONTAINER)
     try:
         container.create_container()
-    except Exception:
-        pass  # đã tồn tại
+    except ResourceExistsError:
+        pass
 
-    # Idempotent: batch đã có output thì bỏ qua (resume mức batch).
-    # Container đã tên "output" nên blob đặt tên trần `target` (không thêm
-    # tiền tố "output/", tránh path output/output/...).
+    # Idempotent: skip batches that already have output (batch-level resume).
+    # The container is already named "output", so blobs use the bare `target`
+    # name (no "output/" prefix, to avoid an output/output/... path).
     if container.get_blob_client(target).exists():
         return func.HttpResponse(
             json.dumps({"status": "already_done", "batch_id": batch_id, "blob": target}),
@@ -71,15 +85,16 @@ def scrape(req: func.HttpRequest) -> func.HttpResponse:
         )
         stats = asyncio.run(run_pipeline(ids, config))
 
-        # pipeline đặt tên file theo chỉ số LOCAL (0..len-1) nên mọi batch_id
-        # trùng tên — upload lại dưới tên GLOBAL `target` để không đè nhau.
+        # The pipeline names its file by LOCAL index (0..len-1), so every
+        # batch_id collides — re-upload under the GLOBAL `target` name so
+        # batches don't overwrite each other.
         produced = list((tmp_path / "output").glob("products_*.json"))
         if produced:
             with produced[0].open("rb") as f:
                 container.get_blob_client(target).upload_blob(f, overwrite=True)
 
-        # log tách theo batch_id (upload, không append) để gọi song song
-        # nhiều batch không tranh chấp cùng một blob.
+        # Logs are split by batch_id (upload, not append) so batches called
+        # in parallel don't contend on the same blob.
         for name, folder in (("not_found_ids.txt", "not_found_ids"), ("failed_ids.txt", "failed_ids")):
             p = tmp_path / "logs" / name
             if p.exists():
@@ -87,6 +102,10 @@ def scrape(req: func.HttpRequest) -> func.HttpResponse:
                     p.read_bytes(), overwrite=True
                 )
 
+    logger.info(
+        "batch %s done: fetched=%d not_found=%d failed=%d blocked=%d",
+        batch_id, stats.fetched, stats.not_found, stats.failed, stats.blocked,
+    )
     return func.HttpResponse(
         json.dumps({
             "status": "done",

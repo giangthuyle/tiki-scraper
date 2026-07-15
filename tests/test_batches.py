@@ -35,3 +35,8 @@ def test_parse_batch_id_missing_raises():
 def test_parse_batch_id_not_int_raises():
     with pytest.raises(ValueError):
         parse_batch_id({"batch_id": "abc"}, {})
+
+
+def test_parse_batch_id_non_dict_body_raises_value_error():
+    with pytest.raises(ValueError):
+        parse_batch_id(5, {})

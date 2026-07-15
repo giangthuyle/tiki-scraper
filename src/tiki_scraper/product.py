@@ -9,8 +9,9 @@ REQUIRED_FIELDS: tuple[str, ...] = ("id",)
 
 
 def parse_product(raw: dict) -> dict:
-    # Lưu nguyên vẹn response product-detail của Tiki (mọi field); chỉ ép id
-    # về int để pipeline dedup (dùng làm khoá) và validate_record so khớp id.
+    # Keep the Tiki product-detail response intact (every field); only coerce
+    # id to int since the pipeline uses it as the dedup key and validate_record
+    # compares it against the requested id.
     return {**raw, "id": int(raw["id"])}
 
 

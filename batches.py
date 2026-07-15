@@ -35,7 +35,7 @@ def batch_slice(batch_id: int) -> tuple[int, int, list[str]]:
 
 def parse_batch_id(body: dict | None, params: dict) -> int:
     raw = None
-    if body and "batch_id" in body:
+    if isinstance(body, dict) and "batch_id" in body:
         raw = body["batch_id"]
     elif params.get("batch_id") is not None:
         raw = params.get("batch_id")
