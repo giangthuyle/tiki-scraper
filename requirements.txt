@@ -1,0 +1,4 @@
+azure-functions
+azure-storage-blob>=12
+aiohttp>=3.9
+uvloop; sys_platform != 'win32'
