@@ -18,11 +18,9 @@ class _FakePage:
     def __init__(self, responses):
         self._responses = iter(responses)
         self.calls = 0
-        self.last_url = None
 
     async def goto(self, url, wait_until=None):
         self.calls += 1
-        self.last_url = url
         return next(self._responses)
 
 

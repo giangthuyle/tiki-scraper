@@ -2,8 +2,6 @@ import asyncio
 import json
 from pathlib import Path
 
-import pytest
-
 from tiki_scraper import pipeline as pipeline_module
 from tiki_scraper.client import BlockedError, FetchError, NotFoundError
 from tiki_scraper.pipeline import (
@@ -170,7 +168,7 @@ async def test_fetch_batch_routes_blocked_error_to_failed_and_blocked(tmp_path, 
 
 async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    browser = _patch_browser(monkeypatch)
+    _patch_browser(monkeypatch)
     config = _make_config(tmp_path)
     ids = ["1", "2", "3", "4", "5"]
 
@@ -186,7 +184,7 @@ async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
 
 async def test_run_pipeline_logs_not_found_and_failed_ids(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    browser = _patch_browser(monkeypatch)
+    _patch_browser(monkeypatch)
     config = _make_config(tmp_path, batch_size=3)
     ids = ["1", "404", "500"]
 

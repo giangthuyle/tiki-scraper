@@ -32,16 +32,3 @@ def batch_slice(batch_id: int) -> tuple[int, int, list[str]]:
     start, end = batch_bounds(batch_id, len(ids), BATCH_SIZE)
     return start, end, list(ids[start : end + 1])
 
-
-def parse_batch_id(body: dict | None, params: dict) -> int:
-    raw = None
-    if isinstance(body, dict) and "batch_id" in body:
-        raw = body["batch_id"]
-    elif params.get("batch_id") is not None:
-        raw = params.get("batch_id")
-    if raw is None:
-        raise ValueError("missing batch_id")
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        raise ValueError(f"batch_id not an integer: {raw!r}")
