@@ -1,9 +1,28 @@
 .venv/
 __pycache__/
 *.pyc
-output/
-logs/
 *.egg-info/
 .pytest_cache/
+
+# scraper artifacts (batch JSON, id logs, run logs)
+output*/
+logs*/
+*.log
+data/*.ndjson
+
+# terraform state / build artifacts (contain storage keys)
 infra/.terraform/
 infra/function.zip
+infra/*.tfstate
+infra/*.tfstate.backup
+
+# secrets (proxy creds etc.)
+.env
+.env.*
+
+# agent scratch
+.superpowers/
+.claude/
+
+.DS_Store
+*(copy)*

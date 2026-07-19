@@ -76,7 +76,7 @@ def _parse(raw: dict) -> dict:
     return raw
 
 
-async def _fake_fetch_json(session, url, retries, backoff_base, proxy=None):
+async def _fake_fetch_json(page, url, retries, backoff_base):
     pid = url.rsplit("/", 1)[-1]
     if pid == "404":
         raise NotFoundError(url)
@@ -87,15 +87,36 @@ async def _fake_fetch_json(session, url, retries, backoff_base, proxy=None):
     return {"id": int(pid), "name": "n", "url_key": "k", "price": 1, "images": []}
 
 
-class _FakeSession:
-    def __init__(self, *args, **kwargs):
-        pass
+class _FakeBrowser:
+    """Stands in for a CloakBrowser instance: hands out dummy pages."""
 
-    async def __aenter__(self):
-        return self
+    def __init__(self):
+        self.pages = 0
+        self.closed = False
 
-    async def __aexit__(self, *exc):
-        return False
+    async def new_page(self):
+        self.pages += 1
+        return object()
+
+    async def close(self):
+        self.closed = True
+
+
+def _patch_browser(monkeypatch) -> _FakeBrowser:
+    browser = _FakeBrowser()
+
+    async def _fake_launch(proxy=None):
+        return browser
+
+    monkeypatch.setattr(pipeline_module, "launch_async", _fake_launch)
+    return browser
+
+
+async def _pool_of(n: int) -> asyncio.Queue:
+    pool: asyncio.Queue = asyncio.Queue()
+    for _ in range(n):
+        pool.put_nowait(object())
+    return pool
 
 
 def _make_config(tmp_path: Path, **overrides) -> FetchConfig:
@@ -115,9 +136,9 @@ def _make_config(tmp_path: Path, **overrides) -> FetchConfig:
 async def test_fetch_batch_splits_success_not_found_and_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
     config = _make_config(tmp_path)
-    semaphore = asyncio.Semaphore(5)
+    pool = await _pool_of(5)
 
-    records, not_found, failed, blocked = await fetch_batch(None, semaphore, ["1", "404", "500"], config)
+    records, not_found, failed, blocked = await fetch_batch(pool, ["1", "404", "500"], config)
 
     assert [r["id"] for r in records] == [1]
     assert not_found == ["404"]
@@ -128,9 +149,9 @@ async def test_fetch_batch_splits_success_not_found_and_failed(tmp_path, monkeyp
 async def test_fetch_batch_dedupes_duplicate_ids_within_batch(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
     config = _make_config(tmp_path)
-    semaphore = asyncio.Semaphore(5)
+    pool = await _pool_of(5)
 
-    records, not_found, failed, blocked = await fetch_batch(None, semaphore, ["1", "1"], config)
+    records, not_found, failed, blocked = await fetch_batch(pool, ["1", "1"], config)
 
     assert len(records) == 1
 
@@ -138,9 +159,9 @@ async def test_fetch_batch_dedupes_duplicate_ids_within_batch(tmp_path, monkeypa
 async def test_fetch_batch_routes_blocked_error_to_failed_and_blocked(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
     config = _make_config(tmp_path)
-    semaphore = asyncio.Semaphore(5)
+    pool = await _pool_of(5)
 
-    records, not_found, failed, blocked = await fetch_batch(None, semaphore, ["1", "blocked"], config)
+    records, not_found, failed, blocked = await fetch_batch(pool, ["1", "blocked"], config)
 
     assert [r["id"] for r in records] == [1]
     assert failed == ["blocked"]
@@ -149,7 +170,7 @@ async def test_fetch_batch_routes_blocked_error_to_failed_and_blocked(tmp_path, 
 
 async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    browser = _patch_browser(monkeypatch)
     config = _make_config(tmp_path)
     ids = ["1", "2", "3", "4", "5"]
 
@@ -165,7 +186,7 @@ async def test_run_pipeline_writes_batches_and_resumes(tmp_path, monkeypatch):
 
 async def test_run_pipeline_logs_not_found_and_failed_ids(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
+    browser = _patch_browser(monkeypatch)
     config = _make_config(tmp_path, batch_size=3)
     ids = ["1", "404", "500"]
 
@@ -179,55 +200,14 @@ async def test_run_pipeline_logs_not_found_and_failed_ids(tmp_path, monkeypatch)
     assert failed_log == "id\n500\n"
 
 
-def test_concurrency_ramp_yields_fibonacci_from_floor():
-    ramp = pipeline_module._concurrency_ramp(3)
-    assert [next(ramp) for _ in range(6)] == [3, 5, 8, 13, 21, 34]
 
 
-def _make_recording_semaphore(recorded: list[int]):
-    class _RecordingSemaphore(asyncio.Semaphore):
-        def __init__(self, value):
-            recorded.append(value)
-            super().__init__(value)
-
-    return _RecordingSemaphore
-
-
-async def test_run_pipeline_ramps_concurrency_up_on_clean_batches(tmp_path, monkeypatch):
+async def test_run_pipeline_opens_one_page_per_concurrency_unit_and_closes_browser(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
-    recorded: list[int] = []
-    monkeypatch.setattr(pipeline_module.asyncio, "Semaphore", _make_recording_semaphore(recorded))
-    config = _make_config(tmp_path, batch_size=1, concurrency=3)
-    ids = ["1", "2", "3", "4"]
+    browser = _patch_browser(monkeypatch)
+    config = _make_config(tmp_path, batch_size=1, concurrency=4)
 
-    await run_pipeline(ids, config)
+    await run_pipeline(["1", "2", "3"], config)
 
-    assert recorded == [3, 5, 8, 13]
-
-
-async def test_run_pipeline_resets_concurrency_to_floor_after_blocked_batch(tmp_path, monkeypatch):
-    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
-    recorded: list[int] = []
-    monkeypatch.setattr(pipeline_module.asyncio, "Semaphore", _make_recording_semaphore(recorded))
-    config = _make_config(tmp_path, batch_size=1, concurrency=3)
-    ids = ["1", "blocked", "3"]
-
-    stats = await run_pipeline(ids, config)
-
-    assert recorded == [3, 5, 3]
-    assert stats.blocked == 1
-
-
-async def test_run_pipeline_fixed_concurrency_never_ramps(tmp_path, monkeypatch):
-    monkeypatch.setattr(pipeline_module, "fetch_json", _fake_fetch_json)
-    monkeypatch.setattr(pipeline_module.aiohttp, "ClientSession", _FakeSession)
-    recorded: list[int] = []
-    monkeypatch.setattr(pipeline_module.asyncio, "Semaphore", _make_recording_semaphore(recorded))
-    config = _make_config(tmp_path, batch_size=1, concurrency=1, adaptive_concurrency=False)
-    ids = ["1", "2", "3"]
-
-    await run_pipeline(ids, config)
-
-    assert recorded == [1, 1, 1]
+    assert browser.pages == 4
+    assert browser.closed is True

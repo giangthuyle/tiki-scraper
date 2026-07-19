@@ -1,94 +1,76 @@
-from types import SimpleNamespace
-
-import aiohttp
 import pytest
 
 from tiki_scraper.client import BlockedError, FetchError, NotFoundError, fetch_json
 
 
 class _FakeResponse:
-    def __init__(self, status: int, payload=None, content_type_error: bool = False):
+    def __init__(self, status: int, body: str):
         self.status = status
-        self._payload = payload
-        self._content_type_error = content_type_error
+        self._body = body
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    async def json(self):
-        if self._content_type_error:
-            request_info = SimpleNamespace(real_url="http://x/1")
-            raise aiohttp.ContentTypeError(request_info=request_info, history=())
-        return self._payload
+    async def text(self):
+        return self._body
 
 
-class _FakeSession:
+class _FakePage:
+    """Stands in for a CloakBrowser page: `goto` returns queued responses."""
+
     def __init__(self, responses):
         self._responses = iter(responses)
         self.calls = 0
-        self.last_proxy = None
+        self.last_url = None
 
-    def get(self, url, proxy=None):
+    async def goto(self, url, wait_until=None):
         self.calls += 1
-        self.last_proxy = proxy
+        self.last_url = url
         return next(self._responses)
 
 
 async def test_fetch_json_success_first_try():
-    session = _FakeSession([_FakeResponse(200, {"id": 1})])
-    result = await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0)
-    assert result == {"id": 1}
-    assert session.calls == 1
+    page = _FakePage([_FakeResponse(200, '{"id": 1}')])
+    assert await fetch_json(page, "http://x/1", retries=3, backoff_base=0.0) == {"id": 1}
+    assert page.calls == 1
 
 
 async def test_fetch_json_404_raises_without_retry():
-    session = _FakeSession([_FakeResponse(404)])
+    page = _FakePage([_FakeResponse(404, "")])
     with pytest.raises(NotFoundError):
-        await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0)
-    assert session.calls == 1
+        await fetch_json(page, "http://x/1", retries=3, backoff_base=0.0)
+    assert page.calls == 1
 
 
 async def test_fetch_json_retries_on_5xx_then_succeeds():
-    session = _FakeSession([_FakeResponse(500), _FakeResponse(200, {"id": 1})])
-    result = await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0)
-    assert result == {"id": 1}
-    assert session.calls == 2
+    page = _FakePage([_FakeResponse(500, ""), _FakeResponse(200, '{"id": 1}')])
+    assert await fetch_json(page, "http://x/1", retries=3, backoff_base=0.0) == {"id": 1}
+    assert page.calls == 2
 
 
 async def test_fetch_json_raises_fetch_error_after_exhausting_retries():
-    session = _FakeSession([_FakeResponse(500), _FakeResponse(500), _FakeResponse(500)])
+    page = _FakePage([_FakeResponse(500, "")] * 3)
     with pytest.raises(FetchError):
-        await fetch_json(session, "http://x/1", retries=2, backoff_base=0.0)
-    assert session.calls == 3
+        await fetch_json(page, "http://x/1", retries=2, backoff_base=0.0)
+    assert page.calls == 3
 
 
 async def test_fetch_json_raises_blocked_error_on_repeated_non_json_200():
-    session = _FakeSession(
-        [
-            _FakeResponse(200, content_type_error=True),
-            _FakeResponse(200, content_type_error=True),
-            _FakeResponse(200, content_type_error=True),
-        ]
-    )
+    page = _FakePage([_FakeResponse(200, "<html>challenge</html>")] * 3)
     with pytest.raises(BlockedError):
-        await fetch_json(session, "http://x/1", retries=2, backoff_base=0.0)
-    assert session.calls == 3
+        await fetch_json(page, "http://x/1", retries=2, backoff_base=0.0)
+    assert page.calls == 3
+
+
+async def test_fetch_json_retries_navigation_errors():
+    class _FlakyPage(_FakePage):
+        async def goto(self, url, wait_until=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("navigation timeout")
+            return _FakeResponse(200, '{"id": 1}')
+
+    page = _FlakyPage([])
+    assert await fetch_json(page, "http://x/1", retries=3, backoff_base=0.0) == {"id": 1}
+    assert page.calls == 2
 
 
 async def test_fetch_json_blocked_error_is_a_fetch_error():
     assert issubclass(BlockedError, FetchError)
-
-
-async def test_fetch_json_passes_proxy_to_session():
-    session = _FakeSession([_FakeResponse(200, {"id": 1})])
-    await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0, proxy="http://p:8080")
-    assert session.last_proxy == "http://p:8080"
-
-
-async def test_fetch_json_defaults_to_no_proxy():
-    session = _FakeSession([_FakeResponse(200, {"id": 1})])
-    await fetch_json(session, "http://x/1", retries=3, backoff_base=0.0)
-    assert session.last_proxy is None

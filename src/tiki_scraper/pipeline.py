@@ -7,23 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import aiohttp
+from cloakbrowser import launch_async
 
 from .client import BlockedError, FetchError, NotFoundError, fetch_json
 
 logger = logging.getLogger(__name__)
-
-# Tiki's edge WAF blocks aiohttp's default User-Agent under load; send a
-# realistic browser header so requests aren't trivially fingerprinted as a
-# bot at the connection level (does not bypass volume-based rate limiting —
-# see --concurrency).
-_DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json",
-}
 
 
 def batch_ranges(total: int, batch_size: int) -> list[tuple[int, int]]:
@@ -100,7 +88,6 @@ class FetchConfig:
     concurrency: int = 3
     retries: int = 3
     backoff_base: float = 2.0
-    adaptive_concurrency: bool = True
     proxy: str | None = None
 
 
@@ -114,43 +101,34 @@ class PipelineStats:
     blocked: int = 0
 
 
-def _concurrency_ramp(min_concurrency: int):
-    """Yields the Fibonacci sequence filtered to values >= min_concurrency
-    (e.g. min=3 -> 3, 5, 8, 13, 21, ...). run_pipeline advances this after
-    each clean batch to feel out a higher sustainable concurrency, and
-    restarts it (back to the floor) the moment a batch shows a WAF block
-    signature."""
-    a, b = 1, 1
-    while True:
-        if a >= min_concurrency:
-            yield a
-        a, b = b, a + b
-
-
-async def _fetch_one(session, semaphore, raw_id, config, records, not_found, failed, blocked) -> None:
+async def _fetch_one(pool, raw_id, config, records, not_found, failed, blocked) -> None:
     url = config.url_template.format(id=raw_id)
-    async with semaphore:
-        try:
-            raw = await fetch_json(session, url, config.retries, config.backoff_base, proxy=config.proxy)
-        except NotFoundError:
-            not_found.append(raw_id)
-            return
-        except BlockedError as exc:
-            logger.error("blocked (WAF signature) for id=%s: %s", raw_id, exc)
-            failed.append(raw_id)
-            blocked.append(raw_id)
-            return
-        except FetchError as exc:
-            logger.error("giving up on id=%s: %s", raw_id, exc)
-            failed.append(raw_id)
-            return
-        except Exception as exc:
-            # A malformed response (e.g. a 200 with a non-JSON body) raises
-            # something other than NotFoundError/FetchError. One bad id must
-            # not crash the whole batch (and, uncaught, the whole 600k-id run).
-            logger.exception("unexpected error fetching id=%s: %s", raw_id, exc)
-            failed.append(raw_id)
-            return
+    page = await pool.get()
+    try:
+        raw = await fetch_json(page, url, config.retries, config.backoff_base)
+    except NotFoundError:
+        not_found.append(raw_id)
+        return
+    except BlockedError as exc:
+        logger.error("blocked (WAF signature) for id=%s: %s", raw_id, exc)
+        failed.append(raw_id)
+        blocked.append(raw_id)
+        return
+    except FetchError as exc:
+        logger.error("giving up on id=%s: %s", raw_id, exc)
+        failed.append(raw_id)
+        return
+    except Exception as exc:
+        # A malformed response (e.g. a 200 with a non-JSON body) raises
+        # something other than NotFoundError/FetchError. One bad id must
+        # not crash the whole batch (and, uncaught, the whole 600k-id run).
+        logger.exception("unexpected error fetching id=%s: %s", raw_id, exc)
+        failed.append(raw_id)
+        return
+    finally:
+        # Return the page to the pool so another id can reuse it (keeping its
+        # solved-challenge cookie). Concurrency is bounded by the pool size.
+        pool.put_nowait(page)
 
     try:
         record = config.parse(raw)
@@ -166,14 +144,14 @@ async def _fetch_one(session, semaphore, raw_id, config, records, not_found, fai
     records.append(record)
 
 
-async def fetch_batch(session, semaphore, ids_batch: list[str], config: FetchConfig):
+async def fetch_batch(pool, ids_batch: list[str], config: FetchConfig):
     records: list[dict] = []
     not_found: list[str] = []
     failed: list[str] = []
     blocked: list[str] = []
     await asyncio.gather(
         *(
-            _fetch_one(session, semaphore, raw_id, config, records, not_found, failed, blocked)
+            _fetch_one(pool, raw_id, config, records, not_found, failed, blocked)
             for raw_id in ids_batch
         )
     )
@@ -207,10 +185,18 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
 
     ranges = batch_ranges(len(ids), config.batch_size)
     stats = PipelineStats(batches_total=len(ranges))
-    ramp = _concurrency_ramp(config.concurrency) if config.adaptive_concurrency else None
-    current_concurrency = next(ramp) if ramp else config.concurrency
+    # Each concurrency unit is a live Chromium tab (~50-80MB), not a cheap
+    # socket — so the pool is a FIXED `concurrency` pages, sized up front.
+    # Pages are reused across ids so each keeps the anti-bot cookie it earned
+    # solving Tiki's JS WAF challenge.
+    n_pages = max(1, config.concurrency)
 
-    async with aiohttp.ClientSession(headers=_DEFAULT_HEADERS) as session:
+    browser = await launch_async(proxy=config.proxy)
+    try:
+        pool: asyncio.Queue = asyncio.Queue()
+        for _ in range(n_pages):
+            pool.put_nowait(await browser.new_page())
+
         for start, end in ranges:
             out_path = config.output_dir / output_filename(start, end)
             if batch_is_done(out_path):
@@ -218,8 +204,7 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
                 continue
 
             batch_slice = ids[start : end + 1]
-            semaphore = asyncio.Semaphore(current_concurrency)
-            records, not_found, failed, blocked = await fetch_batch(session, semaphore, batch_slice, config)
+            records, not_found, failed, blocked = await fetch_batch(pool, batch_slice, config)
 
             # Log not_found/failed ids BEFORE writing the batch file: the
             # batch file's existence is the resume marker (batch_is_done), so
@@ -236,22 +221,13 @@ async def run_pipeline(ids: list[str], config: FetchConfig) -> PipelineStats:
             stats.failed += len(failed)
             stats.blocked += len(blocked)
 
-            used_concurrency = current_concurrency
             if blocked:
-                logger.warning(
-                    "batch %d-%d: WAF block signature on %d ids%s",
-                    start, end, len(blocked),
-                    f" — resetting concurrency to floor {config.concurrency}" if ramp else "",
-                )
-            if ramp:
-                if blocked:
-                    ramp = _concurrency_ramp(config.concurrency)
-                current_concurrency = next(ramp)
-
+                logger.warning("batch %d-%d: WAF block signature on %d ids", start, end, len(blocked))
             logger.info(
-                "batch %d-%d: %d ok, %d not_found, %d failed (%d blocked) at concurrency=%d; next batch concurrency=%d",
-                start, end, len(records), len(not_found), len(failed), len(blocked),
-                used_concurrency, current_concurrency,
+                "batch %d-%d: %d ok, %d not_found, %d failed (%d blocked) at concurrency=%d",
+                start, end, len(records), len(not_found), len(failed), len(blocked), n_pages,
             )
+    finally:
+        await browser.close()
 
     return stats

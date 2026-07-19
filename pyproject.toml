@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Fetch Tiki product-detail data for a large set of product ids"
 requires-python = ">=3.11"
 dependencies = [
-    "aiohttp>=3.9",
+    "cloakbrowser>=0.4.12",
     "uvloop>=0.19; sys_platform != 'win32'",
 ]
 

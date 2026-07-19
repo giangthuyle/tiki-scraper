@@ -1,4 +1,4 @@
 azure-functions
 azure-storage-blob>=12
-aiohttp>=3.9
+cloakbrowser>=0.4.12
 uvloop; sys_platform != 'win32'
