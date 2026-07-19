@@ -56,30 +56,11 @@ count plus any duplicate ids across files.
 
     uv run pytest
 
-## Residential proxy (optional)
+## Proxy (optional)
 
-Direct connections are the default and work fine from a home connection. Tiki does
-block datacenter egress, though, so if you run this from a VPS — or your own IP
-starts getting served challenge pages — route requests through a **residential
-proxy**. Providers such as IPRoyal or Decodo expose a single rotating gateway. Pass
-it via `SCRAPER_PROXY` (rather than a global `HTTPS_PROXY`, so only Tiki requests are
-tunnelled and your metered residential bandwidth isn't spent on anything else):
-
-    SCRAPER_PROXY='http://USER:PASS_country-vn@geo.iproyal.com:12321' \
-      uv run tiki-scraper --concurrency 1
-
-- `_country-vn` after the password pins Vietnamese exit IPs (lower latency, less
-  suspicious). Rotating is the default — one new IP per request. For a sticky IP,
-  append `_session-<id>_lifetime-10m`.
-- If the credentials contain characters that break shell quoting, build the URL with
-  the helper, which reads `USER_PROXY` / `PASSWORD_PROXY` from `.env` and
-  URL-encodes them:
-
-      export SCRAPER_PROXY="$(uv run python scripts/mkproxy.py)"
-
-Leaving `SCRAPER_PROXY` unset means direct connections (the default). Start at
-`--concurrency 1` — residential bandwidth is billed per GB — and raise it while
-nothing gets blocked.
+Runs direct by default. If your IP starts getting served challenge pages, set
+`SCRAPER_PROXY` (or `--proxy`) to a residential proxy URL —
+`scripts/mkproxy.py` builds one from `.env` credentials.
 
 ## Layout
 
