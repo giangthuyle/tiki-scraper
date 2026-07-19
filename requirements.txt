@@ -1,4 +1,0 @@
-azure-functions
-azure-storage-blob>=12
-cloakbrowser>=0.4.12
-uvloop; sys_platform != 'win32'
