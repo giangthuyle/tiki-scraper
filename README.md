@@ -56,13 +56,14 @@ count plus any duplicate ids across files.
 
     uv run pytest
 
-## Residential proxy — getting past the WAF from cloud IPs
+## Residential proxy (optional)
 
-Tiki blocks datacenter egress (Azure, VPS), so a **residential proxy** is required
-when scraping from anywhere but a home connection. Providers such as IPRoyal or
-Decodo expose a single rotating gateway. Pass it via `SCRAPER_PROXY` (rather than a
-global `HTTPS_PROXY`, so only Tiki requests are tunnelled and your metered
-residential bandwidth isn't spent on anything else):
+Direct connections are the default and work fine from a home connection. Tiki does
+block datacenter egress, though, so if you run this from a VPS — or your own IP
+starts getting served challenge pages — route requests through a **residential
+proxy**. Providers such as IPRoyal or Decodo expose a single rotating gateway. Pass
+it via `SCRAPER_PROXY` (rather than a global `HTTPS_PROXY`, so only Tiki requests are
+tunnelled and your metered residential bandwidth isn't spent on anything else):
 
     SCRAPER_PROXY='http://USER:PASS_country-vn@geo.iproyal.com:12321' \
       uv run tiki-scraper --concurrency 1
