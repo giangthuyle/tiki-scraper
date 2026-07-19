@@ -1,6 +1,6 @@
 <div align="center">
 
-# tiki-scraper
+# Tiki Scraper
 
 **Bulk-fetches Tiki product-detail JSON for hundreds of thousands of product ids —
 resumable, WAF-aware, and boring to operate.**
@@ -25,13 +25,13 @@ reused across ids, so the cookie earned by solving the challenge keeps working.
 ## How it works
 
 ```mermaid
-flowchart LR
-    CSV["data/products-*.csv"] --> IDS["load ids<br/>validate + dedup"]
-    IDS --> BATCH["split into batches<br/>--batch-size"]
-    BATCH --> SKIP{"batch file<br/>already on disk?"}
+flowchart TD
+    CSV["data/products-*.csv"] --> IDS["load ids — validate + dedup"]
+    IDS --> BATCH["split into batches (--batch-size)"]
+    BATCH --> SKIP{"batch file already on disk?"}
     SKIP -->|yes| DONE["skip — resume"]
-    SKIP -->|no| POOL["page pool<br/>--concurrency tabs"]
-    POOL --> FETCH["fetch id<br/>retry + backoff"]
+    SKIP -->|no| POOL["page pool (--concurrency tabs)"]
+    POOL --> FETCH["fetch id — retry + backoff"]
     FETCH -->|200 JSON| OK["record"]
     FETCH -->|404| NF["logs/not_found_ids.txt"]
     FETCH -->|retries exhausted| FAIL["logs/failed_ids.txt"]
