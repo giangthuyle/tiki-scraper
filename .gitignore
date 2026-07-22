@@ -26,3 +26,6 @@ infra/*.tfstate.backup
 
 .DS_Store
 *(copy)*
+
+# personal learning scratch, not for repo
+src/tiki_scraper/load_db_g.py

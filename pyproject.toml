@@ -5,11 +5,13 @@ description = "Fetch Tiki product-detail data for a large set of product ids"
 requires-python = ">=3.11"
 dependencies = [
     "cloakbrowser>=0.4.12",
+    "psycopg[binary]>=3.3.4",
     "uvloop>=0.19; sys_platform != 'win32'",
 ]
 
 [project.scripts]
 tiki-scraper = "tiki_scraper.cli:main"
+tiki-scraper-load-db = "tiki_scraper.load_db:main"
 
 [dependency-groups]
 dev = [

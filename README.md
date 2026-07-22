@@ -99,6 +99,22 @@ uv run tiki-scraper --input logs/failed_ids.txt --output-dir output2
 After each run the CLI verifies the output directory and reports the total record
 count plus any duplicate ids across files.
 
+## Load into Postgres
+
+```bash
+export DATABASE_URL=postgresql://user:pass@host:5432/dbname
+uv run tiki-scraper-load-db --output-dir output
+```
+
+Reads every `output/products_*.json`, creates a `products (id BIGINT PRIMARY KEY,
+data JSONB, loaded_at TIMESTAMPTZ)` table if missing, and upserts each record by
+`id` with the full JSON payload in `data`. Each file is `COPY`'d into a scratch
+staging table, then merged into `products` with one `INSERT ... ON CONFLICT` —
+faster than row-by-row inserts for large batches, while still isolating one bad
+file from the rest of the run. A corrupt file or a failed batch write
+is logged and skipped rather than aborting the whole load; the run summary reports
+`loaded` and `skipped_files` counts.
+
 ## Tests
 
 ```bash
