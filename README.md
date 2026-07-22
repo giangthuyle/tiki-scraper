@@ -102,7 +102,8 @@ count plus any duplicate ids across files.
 ## Load into Postgres
 
 ```bash
-export DATABASE_URL=postgresql://user:pass@host:5432/dbname
+docker compose up -d               # local Postgres on :5432 (user/pass/db: tiki)
+export DATABASE_URL=postgresql://tiki:tiki@localhost:5432/tiki
 uv run tiki-scraper-load-db --output-dir output
 ```
 
